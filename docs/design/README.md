@@ -1,6 +1,6 @@
 # 設計文書索引
 
-[<- README](../../README.md) | [<- roadmap](../roadmap.md)
+[<- README](../../README.md) | [<- docs](../README.md) | [<- roadmap](../roadmap.md)
 
 > 設計仕様書は実装コードのそばに配置（コロケーション方式）。
 > 本ファイルは全設計文書へのリンク集。
