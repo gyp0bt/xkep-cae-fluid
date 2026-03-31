@@ -6,14 +6,24 @@
 
 FDM/FVM による非圧縮性 Navier-Stokes ソルバーを Process Architecture 上に構築する。
 
-## Phase 1: 基盤移植（現在）
+## Phase 1: 基盤移植（完了）
 
 - [x] Process Architecture 移植（AbstractProcess, Registry, StrategySlot, Diagnostics）
 - [x] 流体向け Strategy Protocol 定義（Convection, Diffusion, Turbulence, PV-Coupling）
 - [x] 流体向けデータスキーマ（MeshData, FlowFieldData, SolverInputData）
 - [x] 契約検証スクリプト（validate_process_contracts.py）
 - [x] CLAUDE.md / README.md / pyproject.toml
-- [ ] 初期テストスイート
+- [x] 初期テストスイート
+
+## Phase 1.5: 伝熱解析FDM（完了）
+
+- [x] 3次元非定常伝熱解析 HeatTransferFDMProcess（ガウスザイデル法）
+- [x] 伝熱データスキーマ（HeatTransferInput / HeatTransferResult）
+- [x] 境界条件（Dirichlet / Neumann / Adiabatic）
+- [x] 陰的オイラー法による時間積分
+- [x] 面間熱伝導率の調和平均
+- [x] 不均一材料分布対応
+- [x] APIテスト + 物理テスト（解析解比較5ケース）
 
 ## Phase 2: メッシュ・離散化（予定）
 
@@ -49,7 +59,7 @@ FDM/FVM による非圧縮性 Navier-Stokes ソルバーを Process Architecture
 
 - LES / DES
 - 多相流（VOF）
-- 熱連成
+- 伝熱ソルバー高速化（NumPy ベクトル化、Numba JIT）
 - 適応格子細分化（AMR）
 
 ---
