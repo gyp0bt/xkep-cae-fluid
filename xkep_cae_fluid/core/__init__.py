@@ -40,6 +40,11 @@ from xkep_cae_fluid.core.mesh import (
     StructuredMeshProcess,
     StructuredMeshResult,
 )
+from xkep_cae_fluid.core.mesh_reader import (
+    PolyMeshInput,
+    PolyMeshReaderProcess,
+    PolyMeshResult,
+)
 from xkep_cae_fluid.core.registry import ProcessRegistry
 from xkep_cae_fluid.core.runner import ExecutionContext, ProcessRunner
 from xkep_cae_fluid.core.slots import StrategySlot, collect_strategy_slots, collect_strategy_types
@@ -85,4 +90,7 @@ __all__ = [
     "StructuredMeshProcess",
     "StructuredMeshInput",
     "StructuredMeshResult",
+    "PolyMeshReaderProcess",
+    "PolyMeshInput",
+    "PolyMeshResult",
 ]
