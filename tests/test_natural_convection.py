@@ -510,8 +510,110 @@ class TestNaturalConvectionPhysics:
         Nu_avg = np.mean(Nu_local)
 
         # de Vahl Davis (1983): Ra=1000 → Nu ≈ 1.118
-        # 粗いメッシュ・FDM なので許容誤差は大きめ
+        # 粗いメッシュ・FDM なので許容誤差は大きめ（20%以内）
         Nu_ref = 1.118
-        assert abs(Nu_avg - Nu_ref) < 1.0, (
-            f"Nu_avg={Nu_avg:.3f}, Nu_ref={Nu_ref:.3f}, 差={abs(Nu_avg - Nu_ref):.3f}"
+        assert abs(Nu_avg - Nu_ref) / Nu_ref < 0.20, (
+            f"Nu_avg={Nu_avg:.3f}, Nu_ref={Nu_ref:.3f}, "
+            f"相対誤差={abs(Nu_avg - Nu_ref)/Nu_ref*100:.1f}%"
         )
+
+
+def _run_cavity_benchmark(Ra, nx=12, ny=12, nz=3, max_iter=3000):
+    """差分加熱キャビティのベンチマーク実行ヘルパー."""
+    L = 0.1
+    T_hot, T_cold = 310.0, 290.0
+    delta_T = T_hot - T_cold
+    T_ref = 300.0
+    rho, mu = 1.0, 0.01
+    Cp, k_fluid = 1000.0, 1.0
+    nu = mu / rho
+    alpha_th = k_fluid / (rho * Cp)
+    g = 9.81
+    beta = Ra * nu * alpha_th / (g * delta_T * L**3)
+
+    inp = NaturalConvectionInput(
+        Lx=L,
+        Ly=L,
+        Lz=L,
+        nx=nx,
+        ny=ny,
+        nz=nz,
+        rho=rho,
+        mu=mu,
+        Cp=Cp,
+        k_fluid=k_fluid,
+        beta=beta,
+        T_ref=T_ref,
+        gravity=(0.0, -g, 0.0),
+        bc_xm=FluidBoundarySpec(
+            thermal=ThermalBoundaryCondition.DIRICHLET,
+            temperature=T_hot,
+        ),
+        bc_xp=FluidBoundarySpec(
+            thermal=ThermalBoundaryCondition.DIRICHLET,
+            temperature=T_cold,
+        ),
+        bc_ym=FluidBoundarySpec(
+            thermal=ThermalBoundaryCondition.ADIABATIC,
+        ),
+        bc_yp=FluidBoundarySpec(
+            thermal=ThermalBoundaryCondition.ADIABATIC,
+        ),
+        bc_zm=FluidBoundarySpec(
+            condition=FluidBoundaryCondition.SYMMETRY,
+            thermal=ThermalBoundaryCondition.ADIABATIC,
+        ),
+        bc_zp=FluidBoundarySpec(
+            condition=FluidBoundaryCondition.SYMMETRY,
+            thermal=ThermalBoundaryCondition.ADIABATIC,
+        ),
+        max_simple_iter=max_iter,
+        tol_simple=1e-5,
+        alpha_u=0.15,
+        alpha_p=0.05,
+        alpha_T=0.5,
+    )
+    result = NaturalConvectionFDMProcess().process(inp)
+    dx = inp.dx
+    dTdx_hot = (result.T[0, :, :] - T_hot) / (dx / 2.0)
+    Nu_local = -dTdx_hot * L / delta_T
+    return float(np.mean(Nu_local)), result
+
+
+class TestCavityBenchmark:
+    """差分加熱キャビティベンチマーク（de Vahl Davis 1983）の定量検証."""
+
+    @pytest.mark.slow
+    def test_ra_1e3_nusselt(self):
+        """Ra=10³: Nu≈1.118 (20%以内)."""
+        Nu, result = _run_cavity_benchmark(1000)
+        assert abs(Nu - 1.118) / 1.118 < 0.20, (
+            f"Ra=1000: Nu={Nu:.3f} (ref=1.118, err={abs(Nu-1.118)/1.118*100:.1f}%)"
+        )
+
+    @pytest.mark.slow
+    def test_ra_1e4_nusselt(self):
+        """Ra=10⁴: Nu≈2.243 (20%以内)."""
+        Nu, result = _run_cavity_benchmark(10000)
+        assert abs(Nu - 2.243) / 2.243 < 0.20, (
+            f"Ra=10000: Nu={Nu:.3f} (ref=2.243, err={abs(Nu-2.243)/2.243*100:.1f}%)"
+        )
+
+    @pytest.mark.slow
+    def test_ra_1e3_temperature_bounded(self):
+        """Ra=10³: 温度が境界値範囲内."""
+        Nu, result = _run_cavity_benchmark(1000)
+        assert result.T.min() >= 290.0 - 5.0
+        assert result.T.max() <= 310.0 + 5.0
+
+    @pytest.mark.slow
+    def test_ra_1e4_flow_symmetry(self):
+        """Ra=10⁴: 流れ場が概ね反対称."""
+        _, result = _run_cavity_benchmark(10000)
+        nx, ny, nz = result.u.shape
+        # x方向速度は中心面(x=L/2)で概ねゼロ付近
+        mid_x = nx // 2
+        u_mid = np.abs(result.u[mid_x, :, :]).mean()
+        u_max = np.abs(result.u).max()
+        # 中心面のuは最大値の50%以下
+        assert u_mid < 0.5 * u_max or u_max < 1e-10
