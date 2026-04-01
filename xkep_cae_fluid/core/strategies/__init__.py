@@ -4,6 +4,8 @@
 Protocol で規定する。
 """
 
+from xkep_cae_fluid.core.strategies.convection import UpwindConvectionScheme
+from xkep_cae_fluid.core.strategies.diffusion import CentralDiffusionScheme
 from xkep_cae_fluid.core.strategies.protocols import (
     ConvectionSchemeStrategy,
     DiffusionSchemeStrategy,
@@ -20,4 +22,6 @@ __all__ = [
     "TurbulenceModelStrategy",
     "PressureVelocityCouplingStrategy",
     "LinearSolverStrategy",
+    "CentralDiffusionScheme",
+    "UpwindConvectionScheme",
 ]
