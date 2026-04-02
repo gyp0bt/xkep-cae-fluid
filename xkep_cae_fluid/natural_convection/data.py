@@ -124,6 +124,9 @@ class NaturalConvectionInput:
         PISO は複数回の圧力補正で質量保存を大幅改善（非定常向け）。
     n_piso_correctors : int
         PISO の圧力補正回数（デフォルト2）。coupling_method="piso" 時のみ有効。
+    convection_scheme : str
+        対流スキーム。"upwind"（1次風上）, "van_leer", "superbee" のいずれか。
+        TVDスキームは遅延補正法で実装（行列は1次風上、補正はRHSソース）。
     time_scheme : str
         時間積分スキーム。"euler"（1次後退Euler）または "bdf2"（2次BDF）。
         BDF2 は2次精度で、最初のステップは自動的にEulerで実行される。
@@ -164,6 +167,7 @@ class NaturalConvectionInput:
     output_interval: int = 1
     coupling_method: str = "simple"
     n_piso_correctors: int = 2
+    convection_scheme: str = "upwind"
     time_scheme: str = "euler"
 
     @property

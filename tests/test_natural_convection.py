@@ -1641,3 +1641,147 @@ class TestPISOPhysics:
         result = NaturalConvectionFDMProcess().process(inp)
         assert result.n_timesteps == 3
         assert not np.any(np.isnan(result.u))
+
+
+# ---------------------------------------------------------------------------
+# TVD 対流スキームテスト
+# ---------------------------------------------------------------------------
+
+
+class TestTVDConvectionAPI:
+    """TVD 対流スキームの API テスト."""
+
+    def test_convection_scheme_default(self):
+        """convection_scheme のデフォルト値が 'upwind' であること."""
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=3,
+            ny=3,
+            nz=3,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+        )
+        assert inp.convection_scheme == "upwind"
+
+    def test_van_leer_returns_result(self):
+        """van Leer スキームで結果を返すこと."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            max_simple_iter=10,
+            convection_scheme="van_leer",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert not np.any(np.isnan(result.u))
+
+    def test_superbee_returns_result(self):
+        """Superbee スキームで結果を返すこと."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            max_simple_iter=10,
+            convection_scheme="superbee",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert not np.any(np.isnan(result.u))
+
+
+class TestTVDConvectionPhysics:
+    """TVD 対流スキームの物理的妥当性テスト."""
+
+    def test_tvd_pure_conduction(self):
+        """TVD で純粋伝導問題が正しく解けること（対流なしなのでTVD補正=0）."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            max_simple_iter=200,
+            tol_simple=1e-5,
+            convection_scheme="van_leer",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.converged
+        assert np.max(np.abs(result.u)) < 1e-8
+
+    def test_tvd_transient_stability(self):
+        """TVD + 非定常解析が安定すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.1,
+            t_end=0.5,
+            max_simple_iter=10,
+            convection_scheme="van_leer",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 5
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))

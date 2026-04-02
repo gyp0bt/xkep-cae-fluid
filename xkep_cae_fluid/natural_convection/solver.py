@@ -563,6 +563,7 @@ class NaturalConvectionFDMProcess(SolverProcess[NaturalConvectionInput, NaturalC
                     output_interval=inp.output_interval,
                     coupling_method=inp.coupling_method,
                     n_piso_correctors=inp.n_piso_correctors,
+                    convection_scheme=inp.convection_scheme,
                     time_scheme=inp.time_scheme,
                 )
             else:
