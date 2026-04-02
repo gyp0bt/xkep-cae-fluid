@@ -51,6 +51,9 @@ def build_momentum_system(
     u_old: np.ndarray | None = None,
     v_old: np.ndarray | None = None,
     w_old: np.ndarray | None = None,
+    u_old_old: np.ndarray | None = None,
+    v_old_old: np.ndarray | None = None,
+    w_old_old: np.ndarray | None = None,
 ) -> tuple[sparse.csr_matrix, np.ndarray, np.ndarray]:
     """運動量方程式の疎行列を組み立てる.
 
@@ -60,6 +63,8 @@ def build_momentum_system(
         "u", "v", "w" のいずれか
     u_old, v_old, w_old : np.ndarray | None
         前タイムステップの速度場（非定常時）
+    u_old_old, v_old_old, w_old_old : np.ndarray | None
+        前々タイムステップの速度場（BDF2時間積分時）
 
     Returns
     -------
@@ -252,11 +257,21 @@ def build_momentum_system(
     # 時間項（非定常時）
     if inp.is_transient and u_old is not None:
         vel_old_map = {"u": u_old, "v": v_old, "w": w_old}
+        vel_old_old_map = {"u": u_old_old, "v": v_old_old, "w": w_old_old}
         vel_old = vel_old_map[component]
+        vel_old2 = vel_old_old_map[component]
         if vel_old is not None:
-            time_coeff = rho / inp.dt
-            diag += time_coeff
-            rhs += time_coeff * vel_old.ravel()
+            if inp.time_scheme == "bdf2" and vel_old2 is not None:
+                # BDF2: (3u^{n+1} - 4u^n + u^{n-1}) / (2dt)
+                time_coeff = 1.5 * rho / inp.dt
+                diag += time_coeff
+                rhs += (2.0 * rho / inp.dt) * vel_old.ravel()
+                rhs -= (0.5 * rho / inp.dt) * vel_old2.ravel()
+            else:
+                # Euler後退: (u^{n+1} - u^n) / dt
+                time_coeff = rho / inp.dt
+                diag += time_coeff
+                rhs += time_coeff * vel_old.ravel()
 
     # 固体セル: 速度=0 を強制
     solid_cells = is_solid_cell
@@ -715,6 +730,7 @@ def build_energy_system(
     w: np.ndarray,
     T_old_time: np.ndarray | None = None,
     rc_face_velocities: (tuple[np.ndarray, np.ndarray, np.ndarray] | None) = None,
+    T_old_old_time: np.ndarray | None = None,
 ) -> tuple[sparse.csr_matrix, np.ndarray]:
     """エネルギー方程式の疎行列を組み立てる.
 
@@ -733,6 +749,8 @@ def build_energy_system(
         Rhie-Chow 補間済み面速度 (u_face_xp, v_face_yp, w_face_zp)。
         指定時はこの面速度で対流フラックスを計算し、チェッカーボード抑制。
         None の場合は従来通りセル中心速度の線形補間を使用。
+    T_old_old_time : np.ndarray | None
+        前々タイムステップの温度場（BDF2時間積分時）
 
     Returns
     -------
@@ -885,10 +903,17 @@ def build_energy_system(
 
     # 時間項
     if inp.is_transient and T_old_time is not None:
-        # 流体セル: ρCp/dt、固体セル: ρ_s*Cp_s/dt（ここでは同じρCpを仮定）
-        time_coeff = rho * Cp / inp.dt
-        diag += time_coeff
-        rhs += time_coeff * T_old_time.ravel()
+        if inp.time_scheme == "bdf2" and T_old_old_time is not None:
+            # BDF2: (3T^{n+1} - 4T^n + T^{n-1}) / (2dt)
+            time_coeff = 1.5 * rho * Cp / inp.dt
+            diag += time_coeff
+            rhs += (2.0 * rho * Cp / inp.dt) * T_old_time.ravel()
+            rhs -= (0.5 * rho * Cp / inp.dt) * T_old_old_time.ravel()
+        else:
+            # Euler後退: (T^{n+1} - T^n) / dt
+            time_coeff = rho * Cp / inp.dt
+            diag += time_coeff
+            rhs += time_coeff * T_old_time.ravel()
 
     # 行列組み立て
     rows.append(np.arange(n))

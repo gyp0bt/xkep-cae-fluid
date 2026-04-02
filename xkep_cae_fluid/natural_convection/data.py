@@ -122,6 +122,9 @@ class NaturalConvectionInput:
         圧力-速度連成手法。"simple" または "simplec"。
         SIMPLEC は圧力補正のd係数を行列行和で計算し、
         alpha_p=1.0 が使用可能になり収束が高速化する。
+    time_scheme : str
+        時間積分スキーム。"euler"（1次後退Euler）または "bdf2"（2次BDF）。
+        BDF2 は2次精度で、最初のステップは自動的にEulerで実行される。
     """
 
     Lx: float
@@ -158,6 +161,7 @@ class NaturalConvectionInput:
     alpha_T: float = 0.9
     output_interval: int = 1
     coupling_method: str = "simple"
+    time_scheme: str = "euler"
 
     @property
     def dx(self) -> float:

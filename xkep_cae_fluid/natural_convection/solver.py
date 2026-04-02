@@ -180,6 +180,10 @@ def _simple_iteration(
     v_old_time: np.ndarray | None = None,
     w_old_time: np.ndarray | None = None,
     T_old_time: np.ndarray | None = None,
+    u_old_old_time: np.ndarray | None = None,
+    v_old_old_time: np.ndarray | None = None,
+    w_old_old_time: np.ndarray | None = None,
+    T_old_old_time: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, float]]:
     """SIMPLE法の1反復を実行.
 
@@ -194,19 +198,55 @@ def _simple_iteration(
 
     # 1. 運動量方程式を解く → u*, v*, w*
     A_u, b_u, a_P_u = build_momentum_system(
-        inp, u, v, w, p, T, "u", u_old_time, v_old_time, w_old_time
+        inp,
+        u,
+        v,
+        w,
+        p,
+        T,
+        "u",
+        u_old_time,
+        v_old_time,
+        w_old_time,
+        u_old_old_time,
+        v_old_old_time,
+        w_old_old_time,
     )
     u_star_flat = _solve_linear(A_u, b_u, u.ravel(), inp.tol_inner, inp.max_inner_iter)
     residuals["u"] = _compute_residual_norm(A_u, u_star_flat, b_u)
 
     A_v, b_v, a_P_v = build_momentum_system(
-        inp, u, v, w, p, T, "v", u_old_time, v_old_time, w_old_time
+        inp,
+        u,
+        v,
+        w,
+        p,
+        T,
+        "v",
+        u_old_time,
+        v_old_time,
+        w_old_time,
+        u_old_old_time,
+        v_old_old_time,
+        w_old_old_time,
     )
     v_star_flat = _solve_linear(A_v, b_v, v.ravel(), inp.tol_inner, inp.max_inner_iter)
     residuals["v"] = _compute_residual_norm(A_v, v_star_flat, b_v)
 
     A_w, b_w, a_P_w = build_momentum_system(
-        inp, u, v, w, p, T, "w", u_old_time, v_old_time, w_old_time
+        inp,
+        u,
+        v,
+        w,
+        p,
+        T,
+        "w",
+        u_old_time,
+        v_old_time,
+        w_old_time,
+        u_old_old_time,
+        v_old_old_time,
+        w_old_old_time,
     )
     w_star_flat = _solve_linear(A_w, b_w, w.ravel(), inp.tol_inner, inp.max_inner_iter)
     residuals["w"] = _compute_residual_norm(A_w, w_star_flat, b_w)
@@ -269,7 +309,13 @@ def _simple_iteration(
         inp, u_new, v_new, w_new, p_new, a_P_u_eff, a_P_v_eff, a_P_w_eff
     )
     A_T, b_T = build_energy_system(
-        inp, u_new, v_new, w_new, T_old_time, rc_face_velocities=rc_faces
+        inp,
+        u_new,
+        v_new,
+        w_new,
+        T_old_time,
+        rc_face_velocities=rc_faces,
+        T_old_old_time=T_old_old_time,
     )
     T_new_flat = _solve_linear(A_T, b_T, T.ravel(), inp.tol_inner, inp.max_inner_iter)
     residuals["T"] = _compute_residual_norm(A_T, T_new_flat, b_T)
@@ -436,6 +482,12 @@ class NaturalConvectionFDMProcess(SolverProcess[NaturalConvectionInput, NaturalC
         total_outer = 0
         converged = True
 
+        # BDF2 用: 前々タイムステップの値
+        u_old_old: np.ndarray | None = None
+        v_old_old: np.ndarray | None = None
+        w_old_old: np.ndarray | None = None
+        T_old_old: np.ndarray | None = None
+
         while t_current < inp.t_end - 1e-12 * inp.dt:
             n_timesteps += 1
 
@@ -487,9 +539,16 @@ class NaturalConvectionFDMProcess(SolverProcess[NaturalConvectionInput, NaturalC
                     alpha_T=inp.alpha_T,
                     output_interval=inp.output_interval,
                     coupling_method=inp.coupling_method,
+                    time_scheme=inp.time_scheme,
                 )
             else:
                 inp_step = inp
+
+            # 前々ステップ → 前ステップ → 現在の順に保存
+            u_old_old_step = u_old_old
+            v_old_old_step = v_old_old
+            w_old_old_step = w_old_old
+            T_old_old_step = T_old_old
 
             u_old = u.copy()
             v_old = v.copy()
@@ -512,6 +571,10 @@ class NaturalConvectionFDMProcess(SolverProcess[NaturalConvectionInput, NaturalC
                     v_old,
                     w_old,
                     T_old,
+                    u_old_old_step,
+                    v_old_old_step,
+                    w_old_old_step,
+                    T_old_old_step,
                 )
 
                 for key in residuals:
@@ -521,6 +584,12 @@ class NaturalConvectionFDMProcess(SolverProcess[NaturalConvectionInput, NaturalC
                 if max_res < inp_step.tol_simple:
                     step_converged = True
                     break
+
+            # BDF2 用: old_old を更新
+            u_old_old = u_old
+            v_old_old = v_old
+            w_old_old = w_old
+            T_old_old = T_old
 
             if not step_converged:
                 converged = False

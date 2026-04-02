@@ -1207,3 +1207,143 @@ class TestPoiseuillePhysics:
         assert not np.any(np.isnan(result.p))
         # 温度は一様（断熱壁、入口300K、浮力なし）
         np.testing.assert_allclose(result.T, 300.0, atol=0.1)
+
+
+# ---------------------------------------------------------------------------
+# BDF2 時間積分テスト
+# ---------------------------------------------------------------------------
+
+
+class TestBDF2API:
+    """BDF2 時間積分の API テスト."""
+
+    def test_time_scheme_default(self):
+        """time_scheme のデフォルト値が 'euler' であること."""
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=3,
+            ny=3,
+            nz=3,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+        )
+        assert inp.time_scheme == "euler"
+
+    def test_bdf2_transient_runs(self):
+        """BDF2 で非定常解析が動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.1,
+            t_end=0.5,
+            max_simple_iter=10,
+            time_scheme="bdf2",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 5
+        assert not np.any(np.isnan(result.T))
+        assert not np.any(np.isnan(result.u))
+
+
+class TestBDF2Physics:
+    """BDF2 時間積分の物理的妥当性テスト."""
+
+    def test_bdf2_pure_conduction_matches_euler(self):
+        """BDF2 が Euler と同様の定常解に収束すること.
+
+        純粋伝導問題では定常解は時間積分スキームに依存しない。
+        十分な時間発展後、両スキームが同じ温度分布に近づくことを検証。
+        """
+        nx, ny, nz = 5, 5, 3
+        common = dict(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.5,
+            t_end=5.0,
+            max_simple_iter=10,
+        )
+        result_euler = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, time_scheme="euler")
+        )
+        result_bdf2 = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, time_scheme="bdf2")
+        )
+
+        # 同じタイムステップ数
+        assert result_euler.n_timesteps == result_bdf2.n_timesteps
+
+        # 十分発展後の温度場がほぼ一致（定常解に収束）
+        np.testing.assert_allclose(result_bdf2.T, result_euler.T, atol=5.0, rtol=0.1)
+
+    def test_bdf2_first_step_euler_fallback(self):
+        """BDF2 の最初のステップが Euler に自動フォールバックすること.
+
+        2ステップ実行して発散しなければフォールバックが機能している。
+        """
+        nx, ny, nz = 3, 3, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            dt=0.1,
+            t_end=0.2,
+            max_simple_iter=5,
+            time_scheme="bdf2",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 2
+        assert not np.any(np.isnan(result.T))
