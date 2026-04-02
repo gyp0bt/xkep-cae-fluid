@@ -18,7 +18,8 @@ class FluidBoundaryCondition(Enum):
     NO_SLIP = "no_slip"  # 壁面（速度=0、圧力勾配=0）
     SLIP = "slip"  # すべり壁（法線速度=0、接線応力=0）
     INLET_VELOCITY = "inlet_velocity"  # 速度流入
-    OUTLET_PRESSURE = "outlet_pressure"  # 圧力流出
+    OUTLET_PRESSURE = "outlet_pressure"  # 圧力流出（ゼロ勾配）
+    OUTLET_CONVECTIVE = "outlet_convective"  # 対流流出（非反射）
     SYMMETRY = "symmetry"  # 対称面
 
 
@@ -118,6 +119,18 @@ class NaturalConvectionInput:
         温度の緩和係数
     output_interval : int
         結果出力間隔
+    coupling_method : str
+        圧力-速度連成手法。"simple", "simplec", "piso" のいずれか。
+        SIMPLEC は圧力補正のd係数を行列行和で計算し alpha_p=1.0 が使用可能。
+        PISO は複数回の圧力補正で質量保存を大幅改善（非定常向け）。
+    n_piso_correctors : int
+        PISO の圧力補正回数（デフォルト2）。coupling_method="piso" 時のみ有効。
+    convection_scheme : str
+        対流スキーム。"upwind"（1次風上）, "van_leer", "superbee" のいずれか。
+        TVDスキームは遅延補正法で実装（行列は1次風上、補正はRHSソース）。
+    time_scheme : str
+        時間積分スキーム。"euler"（1次後退Euler）または "bdf2"（2次BDF）。
+        BDF2 は2次精度で、最初のステップは自動的にEulerで実行される。
     """
 
     Lx: float
@@ -153,6 +166,10 @@ class NaturalConvectionInput:
     alpha_p: float = 0.3
     alpha_T: float = 0.9
     output_interval: int = 1
+    coupling_method: str = "simple"
+    n_piso_correctors: int = 2
+    convection_scheme: str = "upwind"
+    time_scheme: str = "euler"
 
     @property
     def dx(self) -> float:

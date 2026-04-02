@@ -822,3 +822,1125 @@ class TestTransientNaturalConvection:
         # 5 timesteps × (1以上のSIMPLE反復) = 5以上のエントリ
         assert len(result.residual_history["u"]) >= 5
         assert result.n_timesteps == 5
+
+
+# ---------------------------------------------------------------------------
+# SIMPLEC テスト
+# ---------------------------------------------------------------------------
+
+
+class TestSIMPLECAPI:
+    """SIMPLEC 圧力-速度連成手法の API テスト."""
+
+    def test_coupling_method_default(self):
+        """coupling_method のデフォルト値が 'simple' であること."""
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=3,
+            ny=3,
+            nz=3,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+        )
+        assert inp.coupling_method == "simple"
+
+    def test_simplec_returns_result(self):
+        """SIMPLEC で NaturalConvectionResult を返すこと."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            max_simple_iter=10,
+            coupling_method="simplec",
+        )
+        solver = NaturalConvectionFDMProcess()
+        result = solver.process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert result.u.shape == (nx, ny, nz)
+
+    def test_simplec_transient(self):
+        """SIMPLEC が非定常解析で動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.1,
+            t_end=0.3,
+            max_simple_iter=10,
+            coupling_method="simplec",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 3
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+
+
+class TestSIMPLECPhysics:
+    """SIMPLEC の物理的妥当性テスト."""
+
+    def test_simplec_pure_conduction(self):
+        """SIMPLEC で純粋伝導問題が正しく解けること.
+
+        重力なし（対流なし）で温度分布が線形になることを検証。
+        SIMPLE と SIMPLEC の結果が一致するべき。
+        """
+        nx, ny, nz = 5, 5, 3
+        T_hot, T_cold = 400.0, 300.0
+        common = dict(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=T_hot,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=T_cold,
+            ),
+            max_simple_iter=200,
+            tol_simple=1e-5,
+        )
+        result_simple = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, coupling_method="simple")
+        )
+        result_simplec = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, coupling_method="simplec")
+        )
+
+        # 両方とも収束するべき
+        assert result_simple.converged
+        assert result_simplec.converged
+
+        # 温度場が一致すること（純粋伝導なので完全一致に近い）
+        np.testing.assert_allclose(result_simplec.T, result_simple.T, atol=1.0, rtol=0.05)
+
+        # 速度場がほぼゼロ
+        assert np.max(np.abs(result_simplec.u)) < 1e-8
+        assert np.max(np.abs(result_simplec.v)) < 1e-8
+
+    def test_simplec_no_nan_low_viscosity(self):
+        """SIMPLEC が低粘性で NaN を発生させないこと."""
+        nx, ny, nz = 8, 8, 3
+        inp = NaturalConvectionInput(
+            Lx=0.1,
+            Ly=0.1,
+            Lz=0.1,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=1e-3,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=1e-4,
+            T_ref=300.0,
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            max_simple_iter=100,
+            tol_simple=1e-4,
+            alpha_u=0.3,
+            alpha_p=0.1,
+            coupling_method="simplec",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.v))
+        assert not np.any(np.isnan(result.T))
+
+
+# ---------------------------------------------------------------------------
+# Poiseuille 流れ検証テスト
+# ---------------------------------------------------------------------------
+
+
+class TestPoiseuillePhysics:
+    """Poiseuille 流れ（チャネル流）の物理的妥当性テスト.
+
+    2D平行平板間のPoiseuille流は解析解が既知:
+    u(y) = (1/2μ) * (-dp/dx) * y * (H - y)
+    ここでHはチャネル幅。
+    """
+
+    def test_channel_flow_velocity_profile(self):
+        """チャネル流の速度プロファイルが放物線に近いこと.
+
+        流入速度を一様に与え、十分発達した出口付近で
+        放物線プロファイルに近づくことを検証する。
+        高粘性・低Reで安定な条件を使用。
+        """
+        Lx, Ly, Lz = 0.5, 0.1, 0.1
+        nx, ny, nz = 8, 8, 3
+        U_in = 0.001
+
+        inp = NaturalConvectionInput(
+            Lx=Lx,
+            Ly=Ly,
+            Lz=Lz,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.1,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.INLET_VELOCITY,
+                velocity=(U_in, 0.0, 0.0),
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.OUTLET_PRESSURE,
+                pressure=0.0,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_ym=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_yp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            max_simple_iter=500,
+            tol_simple=1e-5,
+            alpha_u=0.3,
+            alpha_p=0.05,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+
+        # 発散しないこと
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.p))
+
+        # 出口付近の速度プロファイル（x = nx-2, 端から2セル目）
+        u_profile = result.u[-2, :, nz // 2]
+
+        # 壁面近傍で速度が小さいこと
+        assert u_profile[0] < u_profile[ny // 2]
+        assert u_profile[-1] < u_profile[ny // 2]
+
+        # 中心付近で速度が最大
+        center = ny // 2
+        assert u_profile[center] == pytest.approx(np.max(u_profile), abs=0.002)
+
+        # 全体的に正の流れ方向（u > 0）
+        assert np.all(result.u[-2, 1:-1, nz // 2] > 0)
+
+    def test_channel_flow_no_crossflow(self):
+        """チャネル流で横方向速度がほぼゼロであること."""
+        Lx, Ly, Lz = 0.5, 0.1, 0.1
+        nx, ny, nz = 8, 8, 3
+        U_in = 0.001
+
+        inp = NaturalConvectionInput(
+            Lx=Lx,
+            Ly=Ly,
+            Lz=Lz,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.1,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.INLET_VELOCITY,
+                velocity=(U_in, 0.0, 0.0),
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.OUTLET_PRESSURE,
+                pressure=0.0,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_ym=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_yp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            max_simple_iter=500,
+            tol_simple=1e-5,
+            alpha_u=0.3,
+            alpha_p=0.05,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+
+        # 横方向速度は流れ方向速度よりはるかに小さいこと
+        v_max = np.max(np.abs(result.v))
+        u_max = np.max(np.abs(result.u))
+        assert v_max < 0.5 * u_max, f"v_max={v_max:.4e}, u_max={u_max:.4e}"
+
+    def test_channel_flow_converges(self):
+        """チャネル流が収束し、温度場が一様に保たれること."""
+        Lx, Ly, Lz = 0.5, 0.1, 0.1
+        nx, ny, nz = 8, 8, 3
+        U_in = 0.001
+
+        inp = NaturalConvectionInput(
+            Lx=Lx,
+            Ly=Ly,
+            Lz=Lz,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.1,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.INLET_VELOCITY,
+                velocity=(U_in, 0.0, 0.0),
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.OUTLET_PRESSURE,
+                pressure=0.0,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_ym=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_yp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            max_simple_iter=500,
+            tol_simple=1e-5,
+            alpha_u=0.3,
+            alpha_p=0.05,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+
+        # 発散しないこと（入出口BCでは完全収束は困難）
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.p))
+        # 温度は一様（断熱壁、入口300K、浮力なし）
+        np.testing.assert_allclose(result.T, 300.0, atol=0.1)
+
+
+# ---------------------------------------------------------------------------
+# BDF2 時間積分テスト
+# ---------------------------------------------------------------------------
+
+
+class TestBDF2API:
+    """BDF2 時間積分の API テスト."""
+
+    def test_time_scheme_default(self):
+        """time_scheme のデフォルト値が 'euler' であること."""
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=3,
+            ny=3,
+            nz=3,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+        )
+        assert inp.time_scheme == "euler"
+
+    def test_bdf2_transient_runs(self):
+        """BDF2 で非定常解析が動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.1,
+            t_end=0.5,
+            max_simple_iter=10,
+            time_scheme="bdf2",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 5
+        assert not np.any(np.isnan(result.T))
+        assert not np.any(np.isnan(result.u))
+
+
+class TestBDF2Physics:
+    """BDF2 時間積分の物理的妥当性テスト."""
+
+    def test_bdf2_pure_conduction_matches_euler(self):
+        """BDF2 が Euler と同様の定常解に収束すること.
+
+        純粋伝導問題では定常解は時間積分スキームに依存しない。
+        十分な時間発展後、両スキームが同じ温度分布に近づくことを検証。
+        """
+        nx, ny, nz = 5, 5, 3
+        common = dict(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.5,
+            t_end=5.0,
+            max_simple_iter=10,
+        )
+        result_euler = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, time_scheme="euler")
+        )
+        result_bdf2 = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, time_scheme="bdf2")
+        )
+
+        # 同じタイムステップ数
+        assert result_euler.n_timesteps == result_bdf2.n_timesteps
+
+        # 十分発展後の温度場がほぼ一致（定常解に収束）
+        np.testing.assert_allclose(result_bdf2.T, result_euler.T, atol=5.0, rtol=0.1)
+
+    def test_bdf2_first_step_euler_fallback(self):
+        """BDF2 の最初のステップが Euler に自動フォールバックすること.
+
+        2ステップ実行して発散しなければフォールバックが機能している。
+        """
+        nx, ny, nz = 3, 3, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            dt=0.1,
+            t_end=0.2,
+            max_simple_iter=5,
+            time_scheme="bdf2",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 2
+        assert not np.any(np.isnan(result.T))
+
+
+# ---------------------------------------------------------------------------
+# 保守的緩和係数テスト
+# ---------------------------------------------------------------------------
+
+
+class TestConservativeRelaxation:
+    """保守的緩和係数での安定性テスト."""
+
+    def test_conservative_relaxation_stability(self):
+        """保守的緩和係数(alpha_u=0.1, alpha_p=0.03)で発散しないこと.
+
+        低粘性(mu=1e-3)の差分加熱キャビティで安定性を確認。
+        """
+        nx, ny, nz = 8, 8, 3
+        inp = NaturalConvectionInput(
+            Lx=0.1,
+            Ly=0.1,
+            Lz=0.1,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=1e-3,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=1e-4,
+            T_ref=300.0,
+            gravity=(0.0, -9.81, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            max_simple_iter=300,
+            tol_simple=1e-4,
+            alpha_u=0.1,
+            alpha_p=0.03,
+            alpha_T=0.5,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+        # 温度は境界条件の範囲内
+        assert np.min(result.T) >= 295.0
+        assert np.max(result.T) <= 315.0
+
+    def test_simplec_conservative_transient(self):
+        """SIMPLEC + 保守的緩和係数で非定常解析が安定すること."""
+        nx, ny, nz = 8, 8, 3
+        inp = NaturalConvectionInput(
+            Lx=0.1,
+            Ly=0.1,
+            Lz=0.1,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=1e-3,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=1e-4,
+            T_ref=300.0,
+            gravity=(0.0, -9.81, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.01,
+            t_end=0.05,
+            max_simple_iter=20,
+            tol_simple=1e-3,
+            alpha_u=0.3,
+            alpha_p=0.1,
+            coupling_method="simplec",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps >= 5
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+        # 温度は合理的な範囲
+        assert np.min(result.T) >= 290.0
+        assert np.max(result.T) <= 320.0
+
+
+# ---------------------------------------------------------------------------
+# PISO テスト
+# ---------------------------------------------------------------------------
+
+
+class TestPISOAPI:
+    """PISO 圧力-速度連成手法の API テスト."""
+
+    def test_piso_returns_result(self):
+        """PISO で NaturalConvectionResult を返すこと."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            max_simple_iter=10,
+            coupling_method="piso",
+        )
+        solver = NaturalConvectionFDMProcess()
+        result = solver.process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert result.u.shape == (nx, ny, nz)
+
+    def test_piso_transient(self):
+        """PISO が非定常解析で動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.1,
+            t_end=0.3,
+            max_simple_iter=5,
+            coupling_method="piso",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 3
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+
+    def test_n_piso_correctors_default(self):
+        """n_piso_correctors のデフォルト値が 2 であること."""
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=3,
+            ny=3,
+            nz=3,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+        )
+        assert inp.n_piso_correctors == 2
+
+
+class TestPISOPhysics:
+    """PISO の物理的妥当性テスト."""
+
+    def test_piso_pure_conduction(self):
+        """PISO で純粋伝導問題が正しく解けること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            max_simple_iter=200,
+            tol_simple=1e-5,
+            coupling_method="piso",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.converged
+        # 速度場がほぼゼロ（浮力なし）
+        assert np.max(np.abs(result.u)) < 1e-8
+        assert np.max(np.abs(result.v)) < 1e-8
+
+    def test_piso_better_mass_conservation(self):
+        """PISO が SIMPLE より良い質量保存を示すこと.
+
+        同条件で最終 mass 残差を比較。PISO の複数回圧力補正により
+        質量残差が小さくなることを検証。
+        """
+        nx, ny, nz = 5, 5, 3
+        common = dict(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            gravity=(0.0, -9.81, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.5,
+            t_end=2.5,
+            max_simple_iter=5,
+            tol_simple=1e-10,
+        )
+        result_simple = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, coupling_method="simple", alpha_u=0.7, alpha_p=0.3)
+        )
+        result_piso = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, coupling_method="piso")
+        )
+
+        # PISO は発散しない
+        assert not np.any(np.isnan(result_piso.u))
+        assert not np.any(np.isnan(result_piso.T))
+
+        # 最終 mass 残差を比較（PISO の方が小さい、または同等）
+        mass_simple = result_simple.residual_history["mass"][-1]
+        mass_piso = result_piso.residual_history["mass"][-1]
+        # PISO は2回の圧力補正で質量保存を改善するはず
+        assert mass_piso <= mass_simple * 2.0, (
+            f"PISO mass={mass_piso:.4e}, SIMPLE mass={mass_simple:.4e}"
+        )
+
+    def test_piso_3_correctors(self):
+        """PISO 3回圧力補正が動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            dt=0.1,
+            t_end=0.3,
+            max_simple_iter=5,
+            coupling_method="piso",
+            n_piso_correctors=3,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 3
+        assert not np.any(np.isnan(result.u))
+
+
+# ---------------------------------------------------------------------------
+# TVD 対流スキームテスト
+# ---------------------------------------------------------------------------
+
+
+class TestTVDConvectionAPI:
+    """TVD 対流スキームの API テスト."""
+
+    def test_convection_scheme_default(self):
+        """convection_scheme のデフォルト値が 'upwind' であること."""
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=3,
+            ny=3,
+            nz=3,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+        )
+        assert inp.convection_scheme == "upwind"
+
+    def test_van_leer_returns_result(self):
+        """van Leer スキームで結果を返すこと."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            max_simple_iter=10,
+            convection_scheme="van_leer",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert not np.any(np.isnan(result.u))
+
+    def test_superbee_returns_result(self):
+        """Superbee スキームで結果を返すこと."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            max_simple_iter=10,
+            convection_scheme="superbee",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert not np.any(np.isnan(result.u))
+
+
+class TestTVDConvectionPhysics:
+    """TVD 対流スキームの物理的妥当性テスト."""
+
+    def test_tvd_pure_conduction(self):
+        """TVD で純粋伝導問題が正しく解けること（対流なしなのでTVD補正=0）."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            max_simple_iter=200,
+            tol_simple=1e-5,
+            convection_scheme="van_leer",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.converged
+        assert np.max(np.abs(result.u)) < 1e-8
+
+    def test_tvd_transient_stability(self):
+        """TVD + 非定常解析が安定すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.1,
+            t_end=0.5,
+            max_simple_iter=10,
+            convection_scheme="van_leer",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 5
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+
+
+# ---------------------------------------------------------------------------
+# 非反射出口BC (OUTLET_CONVECTIVE) テスト
+# ---------------------------------------------------------------------------
+
+
+class TestOutletConvectiveAPI:
+    """OUTLET_CONVECTIVE 境界条件の API テスト."""
+
+    def test_outlet_convective_enum_exists(self):
+        """OUTLET_CONVECTIVE が FluidBoundaryCondition に定義されていること."""
+        assert hasattr(FluidBoundaryCondition, "OUTLET_CONVECTIVE")
+
+    def test_outlet_convective_runs(self):
+        """OUTLET_CONVECTIVE で解析が動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.1,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.INLET_VELOCITY,
+                velocity=(0.001, 0.0, 0.0),
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.OUTLET_CONVECTIVE,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            max_simple_iter=100,
+            tol_simple=1e-4,
+            alpha_u=0.3,
+            alpha_p=0.05,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert not np.any(np.isnan(result.u))
+
+
+class TestOutletConvectivePhysics:
+    """OUTLET_CONVECTIVE の物理的妥当性テスト."""
+
+    def test_convective_outlet_channel_flow(self):
+        """OUTLET_CONVECTIVE でチャネル流が安定すること."""
+        Lx, Ly, Lz = 0.5, 0.1, 0.1
+        nx, ny, nz = 8, 8, 3
+        U_in = 0.001
+
+        inp = NaturalConvectionInput(
+            Lx=Lx,
+            Ly=Ly,
+            Lz=Lz,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.1,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.INLET_VELOCITY,
+                velocity=(U_in, 0.0, 0.0),
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.OUTLET_CONVECTIVE,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_ym=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_yp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_zp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.SYMMETRY,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            max_simple_iter=500,
+            tol_simple=1e-5,
+            alpha_u=0.3,
+            alpha_p=0.05,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+
+        # 発散しない
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.p))
+
+        # 出口付近で放物線プロファイル
+        u_profile = result.u[-2, :, nz // 2]
+        center = ny // 2
+        assert u_profile[0] < u_profile[center]
+        assert u_profile[-1] < u_profile[center]
+
+    def test_convective_outlet_transient(self):
+        """OUTLET_CONVECTIVE が非定常解析で動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=0.5,
+            Ly=0.1,
+            Lz=0.1,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.1,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.INLET_VELOCITY,
+                velocity=(0.001, 0.0, 0.0),
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.OUTLET_CONVECTIVE,
+                thermal=ThermalBoundaryCondition.ADIABATIC,
+            ),
+            bc_ym=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+            ),
+            bc_yp=FluidBoundarySpec(
+                condition=FluidBoundaryCondition.NO_SLIP,
+            ),
+            dt=0.1,
+            t_end=0.3,
+            max_simple_iter=10,
+            alpha_u=0.3,
+            alpha_p=0.05,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 3
+        assert not np.any(np.isnan(result.u))

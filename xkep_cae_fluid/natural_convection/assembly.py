@@ -3,7 +3,7 @@
 3次元等間隔直交格子上で運動量方程式・圧力補正方程式・エネルギー方程式の
 係数行列と右辺ベクトルを疎行列として組み立てる。
 
-対流項: 1次風上差分
+対流項: 1次風上差分 / TVD（van Leer, Superbee）遅延補正法
 拡散項: 中心差分
 """
 
@@ -40,6 +40,133 @@ def _is_solid(
     return solid_mask[i, j, k]
 
 
+def _limiter_van_leer(r: np.ndarray) -> np.ndarray:
+    """van Leer リミッター: ψ(r) = (r + |r|) / (1 + |r|)."""
+    return (r + np.abs(r)) / (1.0 + np.abs(r))
+
+
+def _limiter_superbee(r: np.ndarray) -> np.ndarray:
+    """Superbee リミッター: ψ(r) = max(0, min(2r,1), min(r,2))."""
+    return np.maximum(0.0, np.maximum(np.minimum(2.0 * r, 1.0), np.minimum(r, 2.0)))
+
+
+def _tvd_deferred_correction(
+    phi: np.ndarray,
+    u: np.ndarray,
+    v: np.ndarray,
+    w: np.ndarray,
+    nx: int,
+    ny: int,
+    nz: int,
+    dx: float,
+    dy: float,
+    dz: float,
+    rho_factor: float,
+    limiter: str,
+    solid_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """TVD 対流スキームの遅延補正ソース項を計算.
+
+    1次風上差分を行列に保持したまま、TVD補正をRHSソースとして追加する。
+    各面の補正: ΔF = F * 0.5 * ψ(r) * (φ_D - φ_U)
+
+    Parameters
+    ----------
+    phi : np.ndarray
+        輸送されるスカラー場 (nx, ny, nz)
+    u, v, w : np.ndarray
+        速度場 (nx, ny, nz)
+    rho_factor : float
+        密度係数（運動量: rho, エネルギー: rho*Cp）
+    limiter : str
+        "van_leer" or "superbee"
+
+    Returns
+    -------
+    np.ndarray
+        補正ソース項 (nx*ny*nz,)
+    """
+    psi_fn = _limiter_van_leer if limiter == "van_leer" else _limiter_superbee
+    correction = np.zeros((nx, ny, nz))
+
+    # x方向面 (i と i+1 の間)
+    if nx > 1:
+        u_face = 0.5 * (u[:-1] + u[1:])  # (nx-1, ny, nz)
+        F = rho_factor * u_face / dx
+        delta = phi[1:] - phi[:-1]  # φ_right - φ_left
+        safe_delta = np.where(np.abs(delta) > 1e-30, delta, np.sign(delta) * 1e-30)
+        safe_delta = np.where(safe_delta == 0, 1e-30, safe_delta)
+
+        # F > 0: upwind=left(i), UU=left-1(i-1)
+        delta_up_pos = np.zeros_like(delta)
+        if nx > 2:
+            delta_up_pos[1:] = phi[1:-1] - phi[:-2]  # φ[i] - φ[i-1] for face i
+
+        # F < 0: upwind=right(i+1), UU=right+1(i+2)
+        delta_up_neg = np.zeros_like(delta)
+        if nx > 2:
+            delta_up_neg[:-1] = phi[1:-1] - phi[2:]  # φ[i+1] - φ[i+2] for face i
+
+        r = np.where(F > 0, delta_up_pos / safe_delta, delta_up_neg / (-safe_delta))
+        psi = psi_fn(r)
+        phi_D_minus_U = np.where(F > 0, delta, -delta)
+        face_corr = F * 0.5 * psi * phi_D_minus_U
+        correction[:-1] += face_corr
+        correction[1:] -= face_corr
+
+    # y方向面 (j と j+1 の間)
+    if ny > 1:
+        v_face = 0.5 * (v[:, :-1] + v[:, 1:])
+        F = rho_factor * v_face / dy
+        delta = phi[:, 1:] - phi[:, :-1]
+        safe_delta = np.where(np.abs(delta) > 1e-30, delta, np.sign(delta) * 1e-30)
+        safe_delta = np.where(safe_delta == 0, 1e-30, safe_delta)
+
+        delta_up_pos = np.zeros_like(delta)
+        if ny > 2:
+            delta_up_pos[:, 1:] = phi[:, 1:-1] - phi[:, :-2]
+
+        delta_up_neg = np.zeros_like(delta)
+        if ny > 2:
+            delta_up_neg[:, :-1] = phi[:, 1:-1] - phi[:, 2:]
+
+        r = np.where(F > 0, delta_up_pos / safe_delta, delta_up_neg / (-safe_delta))
+        psi = psi_fn(r)
+        phi_D_minus_U = np.where(F > 0, delta, -delta)
+        face_corr = F * 0.5 * psi * phi_D_minus_U
+        correction[:, :-1] += face_corr
+        correction[:, 1:] -= face_corr
+
+    # z方向面 (k と k+1 の間)
+    if nz > 1:
+        w_face = 0.5 * (w[:, :, :-1] + w[:, :, 1:])
+        F = rho_factor * w_face / dz
+        delta = phi[:, :, 1:] - phi[:, :, :-1]
+        safe_delta = np.where(np.abs(delta) > 1e-30, delta, np.sign(delta) * 1e-30)
+        safe_delta = np.where(safe_delta == 0, 1e-30, safe_delta)
+
+        delta_up_pos = np.zeros_like(delta)
+        if nz > 2:
+            delta_up_pos[:, :, 1:] = phi[:, :, 1:-1] - phi[:, :, :-2]
+
+        delta_up_neg = np.zeros_like(delta)
+        if nz > 2:
+            delta_up_neg[:, :, :-1] = phi[:, :, 1:-1] - phi[:, :, 2:]
+
+        r = np.where(F > 0, delta_up_pos / safe_delta, delta_up_neg / (-safe_delta))
+        psi = psi_fn(r)
+        phi_D_minus_U = np.where(F > 0, delta, -delta)
+        face_corr = F * 0.5 * psi * phi_D_minus_U
+        correction[:, :, :-1] += face_corr
+        correction[:, :, 1:] -= face_corr
+
+    # 固体セル: 補正なし
+    if solid_mask is not None:
+        correction[solid_mask] = 0.0
+
+    return correction.ravel()
+
+
 def build_momentum_system(
     inp: NaturalConvectionInput,
     u: np.ndarray,
@@ -51,6 +178,9 @@ def build_momentum_system(
     u_old: np.ndarray | None = None,
     v_old: np.ndarray | None = None,
     w_old: np.ndarray | None = None,
+    u_old_old: np.ndarray | None = None,
+    v_old_old: np.ndarray | None = None,
+    w_old_old: np.ndarray | None = None,
 ) -> tuple[sparse.csr_matrix, np.ndarray, np.ndarray]:
     """運動量方程式の疎行列を組み立てる.
 
@@ -60,6 +190,8 @@ def build_momentum_system(
         "u", "v", "w" のいずれか
     u_old, v_old, w_old : np.ndarray | None
         前タイムステップの速度場（非定常時）
+    u_old_old, v_old_old, w_old_old : np.ndarray | None
+        前々タイムステップの速度場（BDF2時間積分時）
 
     Returns
     -------
@@ -194,6 +326,22 @@ def build_momentum_system(
         elif bc.condition == FluidBoundaryCondition.OUTLET_PRESSURE:
             # 出口: ゼロ勾配（何もしない = 自然外挿）
             pass
+        elif bc.condition == FluidBoundaryCondition.OUTLET_CONVECTIVE:
+            # 対流流出（非反射）: 境界面の対流フラックスを陽的に処理
+            # ∂u/∂n = 0 + 流出対流フラックス
+            # 境界面での法線速度を使い、流出フラックスを対角に追加
+            vel_comp = {"u": u, "v": v, "w": w}[component]
+            bd_vel = vel_comp[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]]
+            if di != 0:
+                vn = u[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]] * di
+            elif dj != 0:
+                vn = v[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]] * dj
+            else:
+                vn = w[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]] * dk
+            # 流出フラックスのみ（max(vn, 0)）
+            F_out = rho * np.maximum(vn, 0.0) / d
+            diag[bd_idx] += F_out
+            rhs[bd_idx] += F_out * bd_vel
         elif bc.condition == FluidBoundaryCondition.SYMMETRY:
             # 対称面: 法線速度=0、接線速度勾配=0
             # 法線方向の成分にはDirichlet=0
@@ -252,11 +400,42 @@ def build_momentum_system(
     # 時間項（非定常時）
     if inp.is_transient and u_old is not None:
         vel_old_map = {"u": u_old, "v": v_old, "w": w_old}
+        vel_old_old_map = {"u": u_old_old, "v": v_old_old, "w": w_old_old}
         vel_old = vel_old_map[component]
+        vel_old2 = vel_old_old_map[component]
         if vel_old is not None:
-            time_coeff = rho / inp.dt
-            diag += time_coeff
-            rhs += time_coeff * vel_old.ravel()
+            if inp.time_scheme == "bdf2" and vel_old2 is not None:
+                # BDF2: (3u^{n+1} - 4u^n + u^{n-1}) / (2dt)
+                time_coeff = 1.5 * rho / inp.dt
+                diag += time_coeff
+                rhs += (2.0 * rho / inp.dt) * vel_old.ravel()
+                rhs -= (0.5 * rho / inp.dt) * vel_old2.ravel()
+            else:
+                # Euler後退: (u^{n+1} - u^n) / dt
+                time_coeff = rho / inp.dt
+                diag += time_coeff
+                rhs += time_coeff * vel_old.ravel()
+
+    # TVD 遅延補正（1次風上を行列に保持し、高次補正をRHSに追加）
+    if inp.convection_scheme in ("van_leer", "superbee"):
+        vel_map = {"u": u, "v": v, "w": w}
+        phi_conv = vel_map[component]
+        tvd_src = _tvd_deferred_correction(
+            phi_conv,
+            u,
+            v,
+            w,
+            nx,
+            ny,
+            nz,
+            dx,
+            dy,
+            dz,
+            rho,
+            inp.convection_scheme,
+            inp.solid_mask,
+        )
+        rhs += tvd_src
 
     # 固体セル: 速度=0 を強制
     solid_cells = is_solid_cell
@@ -715,6 +894,7 @@ def build_energy_system(
     w: np.ndarray,
     T_old_time: np.ndarray | None = None,
     rc_face_velocities: (tuple[np.ndarray, np.ndarray, np.ndarray] | None) = None,
+    T_old_old_time: np.ndarray | None = None,
 ) -> tuple[sparse.csr_matrix, np.ndarray]:
     """エネルギー方程式の疎行列を組み立てる.
 
@@ -733,6 +913,8 @@ def build_energy_system(
         Rhie-Chow 補間済み面速度 (u_face_xp, v_face_yp, w_face_zp)。
         指定時はこの面速度で対流フラックスを計算し、チェッカーボード抑制。
         None の場合は従来通りセル中心速度の線形補間を使用。
+    T_old_old_time : np.ndarray | None
+        前々タイムステップの温度場（BDF2時間積分時）
 
     Returns
     -------
@@ -885,10 +1067,37 @@ def build_energy_system(
 
     # 時間項
     if inp.is_transient and T_old_time is not None:
-        # 流体セル: ρCp/dt、固体セル: ρ_s*Cp_s/dt（ここでは同じρCpを仮定）
-        time_coeff = rho * Cp / inp.dt
-        diag += time_coeff
-        rhs += time_coeff * T_old_time.ravel()
+        if inp.time_scheme == "bdf2" and T_old_old_time is not None:
+            # BDF2: (3T^{n+1} - 4T^n + T^{n-1}) / (2dt)
+            time_coeff = 1.5 * rho * Cp / inp.dt
+            diag += time_coeff
+            rhs += (2.0 * rho * Cp / inp.dt) * T_old_time.ravel()
+            rhs -= (0.5 * rho * Cp / inp.dt) * T_old_old_time.ravel()
+        else:
+            # Euler後退: (T^{n+1} - T^n) / dt
+            time_coeff = rho * Cp / inp.dt
+            diag += time_coeff
+            rhs += time_coeff * T_old_time.ravel()
+
+    # TVD 遅延補正（エネルギー方程式）
+    if inp.convection_scheme in ("van_leer", "superbee"):
+        T_for_tvd = T_old_time if T_old_time is not None else np.zeros((nx, ny, nz))
+        tvd_src = _tvd_deferred_correction(
+            T_for_tvd,
+            u,
+            v,
+            w,
+            nx,
+            ny,
+            nz,
+            dx,
+            dy,
+            dz,
+            rho * Cp,
+            inp.convection_scheme,
+            inp.solid_mask,
+        )
+        rhs += tvd_src
 
     # 行列組み立て
     rows.append(np.arange(n))
