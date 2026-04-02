@@ -1347,3 +1347,94 @@ class TestBDF2Physics:
         result = NaturalConvectionFDMProcess().process(inp)
         assert result.n_timesteps == 2
         assert not np.any(np.isnan(result.T))
+
+
+# ---------------------------------------------------------------------------
+# 保守的緩和係数テスト
+# ---------------------------------------------------------------------------
+
+
+class TestConservativeRelaxation:
+    """保守的緩和係数での安定性テスト."""
+
+    def test_conservative_relaxation_stability(self):
+        """保守的緩和係数(alpha_u=0.1, alpha_p=0.03)で発散しないこと.
+
+        低粘性(mu=1e-3)の差分加熱キャビティで安定性を確認。
+        """
+        nx, ny, nz = 8, 8, 3
+        inp = NaturalConvectionInput(
+            Lx=0.1,
+            Ly=0.1,
+            Lz=0.1,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=1e-3,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=1e-4,
+            T_ref=300.0,
+            gravity=(0.0, -9.81, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            max_simple_iter=300,
+            tol_simple=1e-4,
+            alpha_u=0.1,
+            alpha_p=0.03,
+            alpha_T=0.5,
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+        # 温度は境界条件の範囲内
+        assert np.min(result.T) >= 295.0
+        assert np.max(result.T) <= 315.0
+
+    def test_simplec_conservative_transient(self):
+        """SIMPLEC + 保守的緩和係数で非定常解析が安定すること."""
+        nx, ny, nz = 8, 8, 3
+        inp = NaturalConvectionInput(
+            Lx=0.1,
+            Ly=0.1,
+            Lz=0.1,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=1e-3,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=1e-4,
+            T_ref=300.0,
+            gravity=(0.0, -9.81, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.01,
+            t_end=0.05,
+            max_simple_iter=20,
+            tol_simple=1e-3,
+            alpha_u=0.3,
+            alpha_p=0.1,
+            coupling_method="simplec",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps >= 5
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+        # 温度は合理的な範囲
+        assert np.min(result.T) >= 290.0
+        assert np.max(result.T) <= 320.0
