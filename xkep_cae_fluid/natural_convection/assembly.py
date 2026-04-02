@@ -326,6 +326,22 @@ def build_momentum_system(
         elif bc.condition == FluidBoundaryCondition.OUTLET_PRESSURE:
             # 出口: ゼロ勾配（何もしない = 自然外挿）
             pass
+        elif bc.condition == FluidBoundaryCondition.OUTLET_CONVECTIVE:
+            # 対流流出（非反射）: 境界面の対流フラックスを陽的に処理
+            # ∂u/∂n = 0 + 流出対流フラックス
+            # 境界面での法線速度を使い、流出フラックスを対角に追加
+            vel_comp = {"u": u, "v": v, "w": w}[component]
+            bd_vel = vel_comp[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]]
+            if di != 0:
+                vn = u[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]] * di
+            elif dj != 0:
+                vn = v[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]] * dj
+            else:
+                vn = w[ii_f[mask_bd], jj_f[mask_bd], kk_f[mask_bd]] * dk
+            # 流出フラックスのみ（max(vn, 0)）
+            F_out = rho * np.maximum(vn, 0.0) / d
+            diag[bd_idx] += F_out
+            rhs[bd_idx] += F_out * bd_vel
         elif bc.condition == FluidBoundaryCondition.SYMMETRY:
             # 対称面: 法線速度=0、接線速度勾配=0
             # 法線方向の成分にはDirichlet=0

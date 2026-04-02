@@ -18,7 +18,8 @@ class FluidBoundaryCondition(Enum):
     NO_SLIP = "no_slip"  # 壁面（速度=0、圧力勾配=0）
     SLIP = "slip"  # すべり壁（法線速度=0、接線応力=0）
     INLET_VELOCITY = "inlet_velocity"  # 速度流入
-    OUTLET_PRESSURE = "outlet_pressure"  # 圧力流出
+    OUTLET_PRESSURE = "outlet_pressure"  # 圧力流出（ゼロ勾配）
+    OUTLET_CONVECTIVE = "outlet_convective"  # 対流流出（非反射）
     SYMMETRY = "symmetry"  # 対称面
 
 
