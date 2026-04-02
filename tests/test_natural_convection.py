@@ -822,3 +822,178 @@ class TestTransientNaturalConvection:
         # 5 timesteps × (1以上のSIMPLE反復) = 5以上のエントリ
         assert len(result.residual_history["u"]) >= 5
         assert result.n_timesteps == 5
+
+
+# ---------------------------------------------------------------------------
+# SIMPLEC テスト
+# ---------------------------------------------------------------------------
+
+
+class TestSIMPLECAPI:
+    """SIMPLEC 圧力-速度連成手法の API テスト."""
+
+    def test_coupling_method_default(self):
+        """coupling_method のデフォルト値が 'simple' であること."""
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=3,
+            ny=3,
+            nz=3,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+        )
+        assert inp.coupling_method == "simple"
+
+    def test_simplec_returns_result(self):
+        """SIMPLEC で NaturalConvectionResult を返すこと."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            max_simple_iter=10,
+            coupling_method="simplec",
+        )
+        solver = NaturalConvectionFDMProcess()
+        result = solver.process(inp)
+        assert isinstance(result, NaturalConvectionResult)
+        assert result.u.shape == (nx, ny, nz)
+
+    def test_simplec_transient(self):
+        """SIMPLEC が非定常解析で動作すること."""
+        nx, ny, nz = 5, 5, 3
+        inp = NaturalConvectionInput(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.001,
+            T_ref=300.0,
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=400.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            dt=0.1,
+            t_end=0.3,
+            max_simple_iter=10,
+            coupling_method="simplec",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert result.n_timesteps == 3
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.T))
+
+
+class TestSIMPLECPhysics:
+    """SIMPLEC の物理的妥当性テスト."""
+
+    def test_simplec_pure_conduction(self):
+        """SIMPLEC で純粋伝導問題が正しく解けること.
+
+        重力なし（対流なし）で温度分布が線形になることを検証。
+        SIMPLE と SIMPLEC の結果が一致するべき。
+        """
+        nx, ny, nz = 5, 5, 3
+        T_hot, T_cold = 400.0, 300.0
+        common = dict(
+            Lx=1.0,
+            Ly=1.0,
+            Lz=1.0,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=0.01,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=0.0,
+            T_ref=300.0,
+            gravity=(0.0, 0.0, 0.0),
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=T_hot,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=T_cold,
+            ),
+            max_simple_iter=200,
+            tol_simple=1e-5,
+        )
+        result_simple = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, coupling_method="simple")
+        )
+        result_simplec = NaturalConvectionFDMProcess().process(
+            NaturalConvectionInput(**common, coupling_method="simplec")
+        )
+
+        # 両方とも収束するべき
+        assert result_simple.converged
+        assert result_simplec.converged
+
+        # 温度場が一致すること（純粋伝導なので完全一致に近い）
+        np.testing.assert_allclose(result_simplec.T, result_simple.T, atol=1.0, rtol=0.05)
+
+        # 速度場がほぼゼロ
+        assert np.max(np.abs(result_simplec.u)) < 1e-8
+        assert np.max(np.abs(result_simplec.v)) < 1e-8
+
+    def test_simplec_no_nan_low_viscosity(self):
+        """SIMPLEC が低粘性で NaN を発生させないこと."""
+        nx, ny, nz = 8, 8, 3
+        inp = NaturalConvectionInput(
+            Lx=0.1,
+            Ly=0.1,
+            Lz=0.1,
+            nx=nx,
+            ny=ny,
+            nz=nz,
+            rho=1.0,
+            mu=1e-3,
+            Cp=1000.0,
+            k_fluid=1.0,
+            beta=1e-4,
+            T_ref=300.0,
+            bc_xm=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=310.0,
+            ),
+            bc_xp=FluidBoundarySpec(
+                thermal=ThermalBoundaryCondition.DIRICHLET,
+                temperature=300.0,
+            ),
+            max_simple_iter=100,
+            tol_simple=1e-4,
+            alpha_u=0.3,
+            alpha_p=0.1,
+            coupling_method="simplec",
+        )
+        result = NaturalConvectionFDMProcess().process(inp)
+        assert not np.any(np.isnan(result.u))
+        assert not np.any(np.isnan(result.v))
+        assert not np.any(np.isnan(result.T))

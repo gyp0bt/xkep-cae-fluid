@@ -118,6 +118,10 @@ class NaturalConvectionInput:
         温度の緩和係数
     output_interval : int
         結果出力間隔
+    coupling_method : str
+        圧力-速度連成手法。"simple" または "simplec"。
+        SIMPLEC は圧力補正のd係数を行列行和で計算し、
+        alpha_p=1.0 が使用可能になり収束が高速化する。
     """
 
     Lx: float
@@ -153,6 +157,7 @@ class NaturalConvectionInput:
     alpha_p: float = 0.3
     alpha_T: float = 0.9
     output_interval: int = 1
+    coupling_method: str = "simple"
 
     @property
     def dx(self) -> float:

@@ -221,9 +221,24 @@ def _simple_iteration(
         v_star[inp.solid_mask] = 0.0
         w_star[inp.solid_mask] = 0.0
 
+    # SIMPLEC: d係数を行列行和ベースで計算（Van Doormaal-Raithby, 1984）
+    # SIMPLE:  d = rho / a_P（対角のみ）
+    # SIMPLEC: d = rho / (a_P - Σ|a_nb|) = rho / row_sum(A)
+    #          → 圧力補正の影響が大きくなり alpha_p ≈ 1.0 が使用可能
+    if inp.coupling_method == "simplec":
+        a_P_u_eff = np.maximum(np.array(A_u.sum(axis=1)).ravel(), 1.0)
+        a_P_v_eff = np.maximum(np.array(A_v.sum(axis=1)).ravel(), 1.0)
+        a_P_w_eff = np.maximum(np.array(A_w.sum(axis=1)).ravel(), 1.0)
+        alpha_p_eff = 1.0
+    else:
+        a_P_u_eff = a_P_u
+        a_P_v_eff = a_P_v
+        a_P_w_eff = a_P_w
+        alpha_p_eff = inp.alpha_p
+
     # 2. 圧力補正方程式を解く → p'（Rhie-Chow 補間付き）
     A_pp, b_pp = build_pressure_correction_system_rc(
-        inp, u_star, v_star, w_star, p, a_P_u, a_P_v, a_P_w
+        inp, u_star, v_star, w_star, p, a_P_u_eff, a_P_v_eff, a_P_w_eff
     )
     p_prime_flat = _solve_linear(A_pp, b_pp, tol=inp.tol_inner, maxiter=inp.max_inner_iter)
     residuals["p"] = _compute_residual_norm(A_pp, p_prime_flat, b_pp)
@@ -235,13 +250,13 @@ def _simple_iteration(
         v_star,
         w_star,
         p_prime_flat,
-        a_P_u,
-        a_P_v,
-        a_P_w,
+        a_P_u_eff,
+        a_P_v_eff,
+        a_P_w_eff,
     )
 
-    # 4. 圧力を更新（緩和付き）
-    p_new = p + inp.alpha_p * p_prime_flat.reshape(nx, ny, nz)
+    # 4. 圧力を更新（SIMPLEC: alpha_p=1.0, SIMPLE: alpha_p=ユーザ指定）
+    p_new = p + alpha_p_eff * p_prime_flat.reshape(nx, ny, nz)
 
     # 速度に緩和を適用
     u_new = inp.alpha_u * u_new + (1.0 - inp.alpha_u) * u
@@ -250,7 +265,9 @@ def _simple_iteration(
 
     # 5. エネルギー方程式を解く → T
     #    Rhie-Chow 面速度を使って対流フラックスを計算（チェッカーボード抑制）
-    rc_faces = compute_rhie_chow_face_velocity(inp, u_new, v_new, w_new, p_new, a_P_u, a_P_v, a_P_w)
+    rc_faces = compute_rhie_chow_face_velocity(
+        inp, u_new, v_new, w_new, p_new, a_P_u_eff, a_P_v_eff, a_P_w_eff
+    )
     A_T, b_T = build_energy_system(
         inp, u_new, v_new, w_new, T_old_time, rc_face_velocities=rc_faces
     )
@@ -469,6 +486,7 @@ class NaturalConvectionFDMProcess(SolverProcess[NaturalConvectionInput, NaturalC
                     alpha_p=inp.alpha_p,
                     alpha_T=inp.alpha_T,
                     output_interval=inp.output_interval,
+                    coupling_method=inp.coupling_method,
                 )
             else:
                 inp_step = inp
