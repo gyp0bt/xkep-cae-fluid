@@ -420,9 +420,9 @@ def test_temp_dependent():
 
 
 def test_transient_to_melt():
-    """溶断温度まで加熱する過渡解析"""
+    """溶断温度まで加熱する過渡解析 — 10分割 vs 40分割"""
     print("=" * 70)
-    print("Test 4: 過渡解析 (溶断温度 1000K まで)")
+    print("Test 4: 過渡解析 (溶断温度 1000K まで) — メッシュ依存性チェック")
     print("=" * 70)
 
     # ニクロム線: 断面積を小さくして溶断に至る条件
@@ -437,37 +437,44 @@ def test_transient_to_melt():
     tau = rho_val * c_val * L**2 / (np.pi**2 * k_val)
     print(f"  熱時定数 tau = {tau:.4f} s")
     print(f"  断熱昇温率 ≈ {25 * 1.1e-6 / A_val**2 / (rho_val * c_val):.1f} K/s")
-    T, xc, info = solve_1d_joule_gs(
-        n_cells_per_seg=[10],
-        seg_lengths=[L],
-        seg_areas=[A_val],
-        seg_rho=[rho_val],
-        seg_c=[c_val],
-        seg_k=[k_val],
-        seg_rho_e0=[1.1e-6],
-        seg_alpha=[4e-4],
-        current_I=5.0,
-        T_left=300.0,
-        T_right=300.0,
-        T_init=300.0,
-        T_ref=300.0,
-        dt=1e-5,
-        t_end=0.05,
-        T_melt=1000.0,
-        print_every=500,
-    )
+    print()
 
-    print()
-    print(f"  最終時刻   : {info['t_final']:.6e} s")
-    print(f"  溶断到達   : {info['melted']}")
-    print(f"  T_max      : {info['T_max']:.2f} K  at x = {info['T_max_pos'] * 1000:.2f} mm")
-    print(f"  ステップ数 : {info['steps']}")
-    print()
-    print("  温度プロファイル:")
-    for i in range(len(T)):
-        bar = "#" * int((T[i] - 300) / 10)
-        print(f"    x={xc[i] * 1000:6.3f}mm  T={T[i]:8.2f}K  {bar}")
-    print()
+    for n_cells in [10, 40]:
+        print(f"  --- N={n_cells} 分割 ---")
+        T, xc, info = solve_1d_joule_gs(
+            n_cells_per_seg=[n_cells],
+            seg_lengths=[L],
+            seg_areas=[A_val],
+            seg_rho=[rho_val],
+            seg_c=[c_val],
+            seg_k=[k_val],
+            seg_rho_e0=[1.1e-6],
+            seg_alpha=[4e-4],
+            current_I=5.0,
+            T_left=300.0,
+            T_right=300.0,
+            T_init=300.0,
+            T_ref=300.0,
+            dt=1e-5,
+            t_end=0.05,
+            T_melt=1000.0,
+            print_every=500,
+        )
+
+        print()
+        print(f"  最終時刻   : {info['t_final']:.6e} s")
+        print(f"  溶断到達   : {info['melted']}")
+        print(f"  T_max      : {info['T_max']:.2f} K  at x = {info['T_max_pos'] * 1000:.2f} mm")
+        print(f"  ステップ数 : {info['steps']}")
+        print()
+        print("  温度プロファイル:")
+        # 15点に間引いて表示
+        n_show = min(len(T), 15)
+        indices = np.linspace(0, len(T) - 1, n_show, dtype=int)
+        for idx in indices:
+            bar = "#" * max(0, int((T[idx] - 300) / 10))
+            print(f"    x={xc[idx] * 1000:6.3f}mm  T={T[idx]:8.2f}K  {bar}")
+        print()
 
 
 # ======================================================================
